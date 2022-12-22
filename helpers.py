@@ -556,8 +556,8 @@ def read_OCO(pathPref, yLims, xLims, yLims_test, xLims_test):
         
                 df_oco_all = df_oco_all.append(df_oco2, ignore_index=True)
                 #print('Number of footprints: ',df_oco_all.shape)
-        print('Testing area only:')
-        print('shape of footprints: ',df_oco_all.shape)
+        #print('Testing area only:')
+        #print('shape of footprints: ',df_oco_all.shape)
 
     else:
         #get footprints in xLims_test, yLims_test    
@@ -597,21 +597,50 @@ def read_OCO(pathPref, yLims, xLims, yLims_test, xLims_test):
                 df_oco_all = df_oco_all.append(df_oco2, ignore_index=True)
                 df_drop_all = df_drop_all.append(df_drop, ignore_index=True)
                 #print('Number of footprints: ',df_oco_all.shape)
-        print('Without test area')
-        print('shape of footprints in yLims, xLims: ',df_oco_all.shape)
-        print('shape of footprints in xLims_test, yLims_test: ',df_drop_all.shape)
+        #print('Without test area')
+        #print('shape of footprints in yLims, xLims: ',df_oco_all.shape)
+        #print('shape of footprints in xLims_test, yLims_test: ',df_drop_all.shape)
         #drop footprints in testing area
         df_oco_all = df_oco_all[~((df_oco_all.Longitude.isin(df_drop_all['Longitude']))&(df_oco_all.DateTime_UTC.isin(df_drop_all['DateTime_UTC']))&(df_oco_all.Latitude.isin(df_drop_all['Latitude']))&(df_oco_all.SIF_740nm.isin(df_drop_all['SIF_740nm'])))]
         df_oco_all = df_oco_all.reset_index(drop=True)
-        print('shape of footprints for training: ',df_oco_all.shape)
-    sif_up = 3
-    sif_low = 0
-    print('number of daily SIF>'+str(sif_up)+':',len(df_oco_all[df_oco_all['Daily_SIF_740nm']>=sif_up]))
-    print('number of daily SIF<'+str(sif_low)+':',len(df_oco_all[df_oco_all['Daily_SIF_740nm']<=sif_low]))
-    df_oco_all = df_oco_all.drop(df_oco_all[df_oco_all['Daily_SIF_740nm']<=sif_low].index) 
+        #print('shape of footprints for training: ',df_oco_all.shape)
+    #df_oco_all = df_oco_all[df_oco_all['Daily_SIF_740nm'] = 0]
+    df = df_oco_all[df_oco_all.Latitude < (np.max(yLims) - th)]
+    df = df[df.Latitude > (np.min(yLims) + th)]
+    df = df[df.Longitude < (np.max(xLims) - th)]
+    df = df[df.Longitude > (np.min(xLims) + th)]
+    df_oco_all = df.copy()
+    
+    df_oco_all = df_oco_all[df_oco_all['Latitude_Corners1'] > -200]
     df_oco_all = df_oco_all.reset_index(drop=True)
+    df_oco_all = df_oco_all[df_oco_all['Longitude_Corners1'] > -200]
+    df_oco_all = df_oco_all.reset_index(drop=True)
+    
+    print('quality flag = 0',len(df_oco_all[df_oco_all['Quality_Flag'] == 0]))
+    print('quality flag = 1',len(df_oco_all[df_oco_all['Quality_Flag'] == 1]))
+    print('quality flag = 2',len(df_oco_all[df_oco_all['Quality_Flag'] == 2]))
+    df_oco_all = df_oco_all[df_oco_all['Quality_Flag'] == 0]
+    df_oco_all = df_oco_all.reset_index(drop=True)
+    
+    sif_up = 3
+    print('number of daily SIF>'+str(sif_up)+':',len(df_oco_all[df_oco_all['Daily_SIF_740nm']>=sif_up]))
     df_oco_all = df_oco_all.drop(df_oco_all[df_oco_all['Daily_SIF_740nm']>=sif_up].index) 
     df_oco_all = df_oco_all.reset_index(drop=True)
+    
+    sif_low = 0 
+    print('number of daily SIF<'+str(sif_low)+':',len(df_oco_all[df_oco_all['Daily_SIF_740nm']<=sif_low]))
+    df_oco_all = df_oco_all.drop(df_oco_all[df_oco_all['Daily_SIF_740nm']<=sif_low].index)
+    df_oco_all = df_oco_all.reset_index(drop=True)
+    
+    sif_std = df_oco_all['SIF_740nm'].std()
+    print('SIF_740nm_std',sif_std)
+    print('SIF_740nm_mean',df_oco_all['SIF_740nm'].mean())
+    #
+    print('SIF + 2-s Uncertainty<0: ',len(df_oco_all[df_oco_all['SIF_740nm']<(-2+sif_std * df_oco_all['SIF_Uncertainty_740nm'])]))
+    df_oco_all = df_oco_all.drop(df_oco_all[df_oco_all['SIF_740nm']<(-2+sif_std * df_oco_all['SIF_Uncertainty_740nm'])].index) 
+    #) 
+    df_oco_all = df_oco_all.reset_index(drop=True)
+
     print('shape of footprints after process: ',df_oco_all.shape)
     if df_oco_all.shape[0] > 2000000:
         df_oco_all = df_oco_all.sample(n=2000000)
@@ -620,3 +649,9 @@ def read_OCO(pathPref, yLims, xLims, yLims_test, xLims_test):
         0==0
     return df_oco_all
     
+def OCO_filter(df_oco_all, sif_low, sif_up):
+    df_oco_all = df_oco_all[df_oco_all.Daily_SIF_740nm > sif_low]
+    df_oco_all = df_oco_all.reset_index(drop=True)
+    df_oco_all = df_oco_all[df_oco_all.Daily_SIF_740nm < sif_up]
+    df_oco_all = df_oco_all.reset_index(drop=True)    
+    return df_oco_all

@@ -145,7 +145,6 @@ def RunSet(model, dataloader):
   sample = next(iter(dataloader))['sif'].detach().numpy()
   pred = np.zeros((len(dataloader), sample.shape[1], sample.shape[2]))
   targ = np.zeros((len(dataloader), sample.shape[1], sample.shape[2]))
-  print('sample.shape: ',sample.shape)
 
   i = 0
   sample = next(iter(dataloader))
@@ -154,16 +153,12 @@ def RunSet(model, dataloader):
     with torch.no_grad():
         inp = sample['features'].to(device, dtype=torch.float)
         target = sample['sif'].to(device)
-        inp = inp.permute(0,3,1,2)
         pr = model(inp)
-        pr = pr.permute(0,2,3,1)
-        pr = pr.squeeze(-1)
+        
         pred[i,::] = pr.cpu().detach().numpy()[0,0,::] #revised
         targ[i,::] = target.cpu().detach().numpy()[0,0,::]
         i+=1
-  
-  print('pred.shape: ',pred.shape)
-  print('targ.shape: ',targ.shape)
+
   return targ, pred
 
 # load a model checkpoint
@@ -187,20 +182,7 @@ def load_checkpoint(filepath):
 #revised
 def Calc500m(model, DATA_OPTION, pathPref, SCALE_FACTOR,folder_name_save,d_start,d_end,USE_MODEL_OUT=False,xLims=np.array([10,15]),yLims=np.array([45,50])):
   
-  
-
-  Tropo, Modis, Sen2 = helpers.GetGrids(xLims, yLims)
-  ddX_Modis,ddY_Modis,lon_Modis,lat_Modis = Modis['ddX'],Modis['ddY'],Modis['lon'],Modis['lat']
-  lonM, latM = np.meshgrid(lon_Modis, lat_Modis[::-1])
-
-
-  gridded = np.zeros((d_end-d_start,lonM.shape[0],lonM.shape[1]))
-  print('gridded.shape: ', gridded.shape)
-  #revised
-  sif_mean = 0
-  sif_std = 0
-
-  feat_500m, keys, OCO, ylims_gridded, xlims_gridded, ti_days_since = get_calc_500m_dataset(xLims=xLims, yLims=yLims, d_start=d_start, d_end=d_end, USE_MODEL_OUT=True,DATA_OPTION=DATA_OPTION)
+  feat_500m, keys, OCO, ylims_gridded, xlims_gridded, ti_days_since, lon, lat, lonM, latM, lon_Modis, lat_Modis = get_calc_500m_dataset(xLims=xLims, yLims=yLims, d_start=d_start, d_end=d_end, USE_MODEL_OUT=True,DATA_OPTION=DATA_OPTION)
 
   dataset_test = DataSet(feat_500m, OCO) #
   dataloader_test = DataLoader(dataset_test, batch_size=1, shuffle=False)
@@ -210,8 +192,11 @@ def Calc500m(model, DATA_OPTION, pathPref, SCALE_FACTOR,folder_name_save,d_start
   print('pred_test[0,::]: ',pred_test[0,0,0])
   print('pred_test[-1,::]: ',pred_test[-1,0,0])
   
+  gridded = np.zeros((d_end-d_start,lonM.shape[0],lonM.shape[1]))
+  print('gridded.shape: ', gridded.shape)
+  
   i = 0
-  y_size, x_size = 1, 1000
+  y_size, x_size = 100, 100
 
   for y_grid in ylims_gridded[:-1]:
     for x_grid in xlims_gridded[:-1]:
@@ -279,8 +264,8 @@ def Calc500m(model, DATA_OPTION, pathPref, SCALE_FACTOR,folder_name_save,d_start
   var_dates[:] = ti_days_since
   
   #compute MSE between prediction and OCOs footprints
-  MSE = get_500m_dataset_OCO(xLims = np.array([10, 15]), yLims = np.array([45, 50]), pathPref=pathPref, folder_name_save=folder_name_save)
-  print('MSE: ', MSE)
+  #MSE = get_500m_dataset_OCO(xLims = np.array([10, 15]), yLims = np.array([45, 50]), pathPref=pathPref, folder_name_save=folder_name_save)
+  #print('MSE: ', MSE)
 
   OutputFile.close()
 

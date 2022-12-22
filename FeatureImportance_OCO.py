@@ -57,7 +57,7 @@ plt.rcParams.update({'font.size':14})
 import sys
 #sys.path.insert(1, '../')
 import helpers
-from dataset_OCO import get_500m_dataset
+from dataset_OCO import get_calc_500m_dataset
 from dataset_OCO import DataSet
 from ModelClass import SR_SIF
 
@@ -96,7 +96,7 @@ def RunSet(model, dataloader):
         inp = inp.permute(0,3,1,2)
         pr = model(inp)
         pr = pr.permute(0,2,3,1)
-        pr = pr.squeeze(-1)        
+        #pr = pr.squeeze(-1)        
         pred[i,::] = pr.cpu().detach().numpy()[0,0,::]
         targ[i,::] = target.cpu().detach().numpy()[0,0,::]
         i+=1
@@ -121,7 +121,22 @@ def load_checkpoint(filepath):
 
 # Cross Validate
 """
-def FeatureImportance(inp_te, dict_oco_te, keys, dates_te, days_since_test, lon, lat, model, pathPref, results_folder, BATCH_SIZE_TEST=1, FI_RUNS=2, DATA_OPTION=1, SaveFileName='Results_FeatureImportances.nc'):
+def FeatureImportance(model, pathPref, results_folder, xLims=np.array([10,15]),yLims=np.array([45,50]), d_start=0, d_end=68, USE_MODEL_OUT=False, BATCH_SIZE_TEST=1, FI_RUNS=2, DATA_OPTION=1, SaveFileName='Results_FeatureImportances.nc'):
+
+
+
+  gridded = np.zeros((d_end-d_start,lonM.shape[0],lonM.shape[1]))
+  print('gridded.shape: ', gridded.shape)
+  #revised
+  sif_mean = 0
+  sif_std = 0
+
+  inp_te, keys, dict_oco_te, ylims_gridded, xlims_gridded, ti_days_since, lon, lat, lonM, latM = get_calc_500m_dataset(xLims=xLims, yLims=yLims, d_start=d_start, d_end=d_end, USE_MODEL_OUT=True,DATA_OPTION=DATA_OPTION)
+
+  dataset_test = DataSet(inp_te, dict_oco_te) #
+  dataloader_test = DataLoader(dataset_test, batch_size=BATCH_SIZE_TEST, shuffle=False)
+  targ_test, pred_test_nochange = RunSet(model, dataloader_test)
+  
   
   comp_clusters = True
   if DATA_OPTION==1 or DATA_OPTION==19:
@@ -133,26 +148,6 @@ def FeatureImportance(inp_te, dict_oco_te, keys, dates_te, days_since_test, lon,
                 'SM': ['ssm', 'susm'],
                 'LULC': ['LULC_Others', 'LULC_ENF', 'LULC_EBF', 'LULC_DNF', 'LULC_DBF', 'LULC_Mixed Forest', 'LULC_Unknown Forest', 'LULC_Shrubland', 'LULC_Grassland', 'LULC_Cropland', 'LULC_Wetland']
                 }
-    #clusters_stat = {,}
-    
-  elif DATA_OPTION==13:
-    cluster_keys = ['MODIS_bands', 'meteo', 'SM', 'LULC']
-    clusters_dyn = {'MODIS_bands': ['NIR', 'RED', 'Blue', 'Green', 'SWIR1', 'SWIR2','SWIR3'],
-                'meteo': ['temperature', 'precipitation', 'temperature_delay', 'precipitation_delay'],
-                'SM': ['ssm', 'susm']
-                }
-    clusters_stat = {'LULC': ['LULC_Others', 'LULC_ENF', 'LULC_EBF', 'LULC_DNF', 'LULC_DBF', 'LULC_Mixed Forest', 'LULC_Unknown Forest', 'LULC_Shrubland', 'LULC_Grassland', 'LULC_Cropland', 'LULC_Wetland'],
-                    'fragmentation': ['forest_share', 'edge_share']
-                    }
-  elif DATA_OPTION==15 or DATA_OPTION==20:
-    cluster_keys = ['MODIS_bands', 'meteo', 'SM', 'LULC']
-    clusters_dyn = {'MODIS_bands': ['NIR', 'RED', 'Blue', 'Green', 'SWIR1', 'SWIR2','SWIR3'],
-                'meteo': ['temperature', 'precipitation', 'temperature_delay', 'precipitation_delay'],
-                'SM': ['ssm', 'susm']
-                }
-    clusters_stat = {'LULC': ['LULC_Others', 'LULC_ENF', 'LULC_EBF', 'LULC_DNF', 'LULC_DBF', 'LULC_Mixed Forest', 'LULC_Unknown Forest', 'LULC_Shrubland', 'LULC_Grassland', 'LULC_Cropland', 'LULC_Wetland'],
-                    'fragmentation': ['forest_share', 'edge_share']
-                    }
   else:
     cluster_keys = []
     clusters_dyn = {}
@@ -181,16 +176,16 @@ def FeatureImportance(inp_te, dict_oco_te, keys, dates_te, days_since_test, lon,
     '''
 
   df = pd.DataFrame({}, index = keys)
+  df_cl = pd.DataFrame({}, index = cluster_keys)
+
+
+
 
   for loopFI in range(FI_RUNS):
     pred_test = {}
-
     feat_dim = inp_te.shape[3]
 
-    dataset_test = DataSet(inp_te, dict_oco_te) #
-    dataloader_test = DataLoader(dataset_test, batch_size=BATCH_SIZE_TEST, shuffle=False)
-    targ_test, pred_test_nochange = RunSet(model, dataloader_test)
-
+    '''
     #timely changing maps
     for key_flip_ind in range(feat_dim):
       feat_te_sh = inp_te.copy()
@@ -206,21 +201,6 @@ def FeatureImportance(inp_te, dict_oco_te, keys, dates_te, days_since_test, lon,
       targ_test, pred_test[key_flip_ind] = RunSet(model, dataloader_test)
 
     key_flip_ind += 1
-    '''
-    #static maps
-    for key_flip_ind_static in range(feat_static_te.shape[2]):
-      feat_static_te_sh = feat_static_te.copy()
-      feat_shuffle = feat_static_te_sh[:,:,key_flip_ind_static].copy()
-      sh_shuffle = feat_shuffle.shape
-      x = feat_shuffle.flatten()
-      np.random.shuffle(x)
-      feat_static_te_sh[:,:,key_flip_ind_static] = x.reshape(sh_shuffle)
-
-      dataset_test = DataSet(feat_te_sh,feat_static_te_sh,sif_te, CV_FLAG_MULTIREGION=False, TrainFlag=False,key_flip_ind=-1) #
-      dataloader_test = DataLoader(dataset_test, batch_size=1, shuffle=False)
-
-      targ_test, pred_test[key_flip_ind] = RunSet(model, dataloader_test)
-      key_flip_ind += 1
     '''
 
     ###################################
@@ -246,49 +226,29 @@ def FeatureImportance(inp_te, dict_oco_te, keys, dates_te, days_since_test, lon,
         dataloader_test = DataLoader(dataset_test, batch_size=1, shuffle=False)
 
         targ_test, pred_test_clusters[k] = RunSet(model, dataloader_test)
-      '''
-      #clusters static
-      for k,loopClusters in zip(clusters_stat.keys(),range(len(clusters_stat.keys()))):
-        
-        feat_static_te_sh = feat_static_te.copy()
+      #add FIs calculated for  clusters
+        rmse_FI = []
+        r2_FI = []
+        gt = targ_test.flatten()
+        for i in range(len(pred_test)):
+          x_FI = pred_test[i].flatten()
+          rmse_FI.append(np.sqrt(mean_squared_error(gt, x_FI)))
+          r2_FI.append(r2_score(gt, x_FI))
 
-        #run current cluster
-        indices = clusters_stat_ind[k]
-        for loopKey in indices:
-          feat_shuffle = feat_static_te_sh[:,:,loopKey].copy()
-          sh_shuffle = feat_shuffle.shape
-          x = feat_shuffle.flatten()
-          np.random.shuffle(x)
-          feat_static_te_sh[:,:,loopKey] = x.reshape(sh_shuffle)
-
-        dataset_test = DataSet(feat_te_sh, sif_te, CV_FLAG_MULTIREGION=False, TrainFlag=False,key_flip_ind=-1) #
-        dataloader_test = DataLoader(dataset_test, batch_size=1, shuffle=False)
-
-        targ_test, pred_test_clusters[k] = RunSet(model, dataloader_test)
-      '''
-
-    #FIs calculated for individual features 
-    rmse_FI = []
-    r2_FI = []
-    gt = targ_test.flatten()
-    for i in range(len(pred_test)):
-        x_FI = pred_test[i].flatten()
-        rmse_FI.append(np.sqrt(mean_squared_error(gt, x_FI)))
-        r2_FI.append(r2_score(gt, x_FI))
-
-    rmse_FI_noChange = np.sqrt(mean_squared_error(gt, pred_test_nochange.flatten()))
-    r2_FI_noChange = r2_score(gt, pred_test_nochange.flatten())
+        rmse_FI_noChange = np.sqrt(mean_squared_error(gt, pred_test_nochange.flatten()))
+        r2_FI_noChange = r2_score(gt, pred_test_nochange.flatten())
     
-    rmse_FI_diff = (rmse_FI - rmse_FI_noChange)
-    r2_FI_diff = (r2_FI_noChange - r2_FI)
-    df['rmse_FI_diffDivSum_run'+str(loopFI)] = rmse_FI_diff / np.sum(rmse_FI_diff) * 100
-    df['r2_FI_diff_run'+str(loopFI)] = r2_FI_diff / np.sum(r2_FI_diff) * 100
+        rmse_FI_diff = (rmse_FI - rmse_FI_noChange)
+        r2_FI_diff = (r2_FI_noChange - r2_FI)
+        df_cl['rmse_FI_diffDivSum_run'+str(loopClusters)] = rmse_FI_diff / np.sum(rmse_FI_diff) * 100
+        df_cl['r2_FI_diff_run'+str(loopClusters)] = r2_FI_diff / np.sum(r2_FI_diff) * 100
 
-    df['rmse_FI_diff_run'+str(loopFI)] = rmse_FI_diff
-    df['r2_FI_diff_run'+str(loopFI)] = r2_FI_diff
+        df_cl['rmse_FI_diff_run'+str(loopClusters)] = rmse_FI_diff
+        df_cl['r2_FI_diff_run'+str(loopClusters)] = r2_FI_diff
 
-    df['rmse_FI_share_run'+str(loopFI)] = rmse_FI / rmse_FI_noChange
-    df['r2_FI_share_run'+str(loopFI)] = r2_FI / r2_FI_noChange
+        df_cl['rmse_FI_share_run'+str(loopClusters)] = rmse_FI / rmse_FI_noChange
+        df_cl['r2_FI_share_run'+str(loopClusters)] = r2_FI / r2_FI_noChange
+      #add
 
 
   df.to_csv(pathPref +results_folder+ SaveFileName.replace('.nc','.csv'))
@@ -297,7 +257,12 @@ def FeatureImportance(inp_te, dict_oco_te, keys, dates_te, days_since_test, lon,
   print(df)
   print('##############################################')
 
-  '''
+  df_cl.to_csv(pathPref +results_folder+'Cluster' +SaveFileName.replace('.nc','.csv'))
+  print('##############################################')
+  print('Feature Importances: diff = err_FI - err_FI_noChange and share = rmse_FI / rmse_FI_noChange')
+  print(df_cl)
+  print('##############################################')
+
   print('Saving feature importances of run ', FI_RUNS)
   print('targ_test.shape',targ_test.shape)
   print('lon.shape',lon.shape)
@@ -317,8 +282,8 @@ def FeatureImportance(inp_te, dict_oco_te, keys, dates_te, days_since_test, lon,
   var_sif_lr = OutputFile.createVariable("sif_lr", "f4", ("time","lat","lon"))
 
   var_dates.units = 'days since 1970-01-01'
-  var_lon[:] = range(4)
-  var_lat[:] = range(5)
+  var_lon[:] = lon
+  var_lat[:] = lat
   var_sif_gt[:] = targ_test
   var_sif_lr[:] = inp_te[:,:,:,0]
   var_dates[:] = days_since_test
@@ -345,7 +310,7 @@ def FeatureImportance(inp_te, dict_oco_te, keys, dates_te, days_since_test, lon,
       var_sif_pred[:] = pred_test_clusters[k]
 
   OutputFile.close()
-  '''
+
   #df.to_csv(pathPref+results_folder+SaveFileName.replace('.nc','.csv'))
 
 

@@ -73,28 +73,8 @@ def get_500m_dataset(xLims=np.array([10,15]), yLims=np.array([45,50]), xLims_tes
     pathLoadSZA = pathPref + 'cosSZA_2018-2021_16day_0005.csv'
     pathLoadSoMo = pathPref + 'SoMo_04-2018-03-2021_005deg_16day.nc'
     pathLoadERA5 = pathPref + 'ERA5_04-2018-03-2021_005deg_16day.nc'
-
+    pathLoadOCO = pathPref + 'OCOmap_E0_20_N40_55.nc'
     
-    #OCO
-    df_oco2 = helpers.read_OCO(pathPref, yLims, xLims, yLims_test, xLims_test)
-    print(df_oco2.min())
-    print(df_oco2.max())
-
-    '''
-    year = 2018
-    X = 2
-    df_oco2 = pd.read_csv(pathPref + 'OCO'+str(X) +'_'+ str(year) + '_3_Germany.csv')
-    df_oco2 = df_oco2.drop('Unnamed: 0',axis=1)
-
-    th = 0.01
-    df = df_oco2[df_oco2.Latitude < (np.max(yLims) + th)]
-    df = df[df_oco2.Latitude > (np.min(yLims) + th)]
-    df = df[df_oco2.Longitude < (np.max(xLims) + th)]
-    df = df[df_oco2.Longitude > (np.min(xLims) + th)]
-    df = df.reset_index(drop=True)
-    df_oco2 = df.copy()
-    print('Number of footprints: ',df_oco2.shape)
-    '''
 
     #%%
     # get grids
@@ -230,8 +210,8 @@ def get_500m_dataset(xLims=np.array([10,15]), yLims=np.array([45,50]), xLims_tes
     
     lat_lm_0005 = nc_lm.variables['lat'][:].data
     lon_lm_0005 = nc_lm.variables['lon'][:].data
-    print('lat_lm_0005,lon_lm_0005',lat_lm_0005,lon_lm_0005)
-    print(len(lat_lm_0005),len(lon_lm_0005))
+    #print('lat_lm_0005,lon_lm_0005',lat_lm_0005,lon_lm_0005)
+    #print(len(lat_lm_0005),len(lon_lm_0005))
     
     ix1,ix2 = np.argmin(abs(lon_lm_0005-np.min(lon_Modis))),np.argmin(abs(lon_lm_0005-np.max(lon_Modis))) + 1
     ix_min_lm,ix_max_lm = int(np.min([ix1, ix2])),int(np.max([ix1, ix2]))
@@ -279,12 +259,73 @@ def get_500m_dataset(xLims=np.array([10,15]), yLims=np.array([45,50]), xLims_tes
 
     for k,i in zip(keys,range(len(keys))):
         lulc[:,:,i] = np.flipud(nc_lulc.variables[k][iy_min_lulc:iy_max_lulc,ix_min_lulc:ix_max_lulc].data)
-    
+    nc_lulc.close()
     # %%
     cosSZA = helpers.GetSZAMap(pathLoadSZA, xLims, yLims, dates, ddX_Modis)
     cosSZA = np.moveaxis(cosSZA,-1,0)
 
+    #get oco footprints
+    nc_oco = netCDF4.Dataset(pathLoadOCO, 'r')
+    lon_oco = nc_oco.variables['lon'][:].data
+    lat_oco = nc_oco.variables['lat'][:].data
+    lat_oco = np.flip(lat_oco, 0)
+    ix1,ix2 = np.argmin(abs(lon_oco-np.min(lon_Modis))),np.argmin(abs(lon_oco-np.max(lon_Modis))) + 1
+    ix_min_oco,ix_max_oco = int(np.min([ix1, ix2])),int(np.max([ix1, ix2]))
+    iy1,iy2 = np.argmin(abs(lat_oco-np.min(lat_Modis))) + 1,np.argmin(abs(lat_oco-np.max(lat_Modis)))
+    iy_min_oco,iy_max_oco = int(np.min([iy1, iy2])),int(np.max([iy1, iy2]))
+    
+    lat_oco = lat_oco[iy_min_oco:iy_max_oco][::-1]
+    lon_oco = lon_oco[ix_min_oco:ix_max_oco]
+    #print('lat_oco',lat_oco)
+    #print('lon_oco',lon_oco)
+    
+    OCOmap = nc_oco.variables['OCO_footprint'][:,iy_min_oco:iy_max_oco,ix_min_oco:ix_max_oco].data
+    nc_oco.close()
+    t_oco, y_oco, x_oco = OCOmap.shape[0], OCOmap.shape[1], OCOmap.shape[2]
+    
 
+    #generate sample targets
+    y_size, x_size = 10, 10
+    df_oco = pd.DataFrame({'t':[],
+        'y_min':[],
+        'y_max':[],
+        'x_min':[],
+        'x_max':[]
+        })
+    
+    if yLims_test[0]==200 and xLims_test[0]==200: #testing area only
+      for t in range(t_oco):
+        for y in range(0,y_oco-y_size,2):
+          for x in range(0,x_oco-x_size,2):
+            y_min, y_max, x_min, x_max = y, y+y_size, x, x+x_size
+            
+            Masked_oco = OCOmap[t, y_min:y_max, x_min:x_max]
+            if np.count_nonzero(np.isnan(Masked_oco))<=10:
+              df_oco.loc[len(df_oco.index)] = [t, y_min, y_max, x_min, x_max]
+    else:
+      Tropo, Modis, Sen2 = helpers.GetGrids(xLims_test, yLims_test)
+      ddX_Modis,ddY_Modis,lon_Modis_test,lat_Modis_test = Modis['ddX'],Modis['ddY'],Modis['lon'],Modis['lat']
+      
+      ix1,ix2 = np.argmin(abs(lon_oco-np.min(lon_Modis_test))),np.argmin(abs(lon_oco-np.max(lon_Modis_test))) + 1
+      ix_min_oco,ix_max_oco = int(np.min([ix1, ix2])),int(np.max([ix1, ix2]))
+      iy1,iy2 = np.argmin(abs(lat_oco-np.min(lat_Modis_test))) + 1,np.argmin(abs(lat_oco-np.max(lat_Modis_test)))
+      iy_min_oco,iy_max_oco = int(np.min([iy1, iy2]))-1,int(np.max([iy1, iy2]))+1
+      
+      for t in range(t_oco):
+        for y in range(0,y_oco-y_size,2):
+          for x in range(0,x_oco-x_size,2):
+            if (y>iy_min_oco) and (y<iy_max_oco-y_size) and (x>ix_min_oco) and (x<ix_max_oco-x_size): #skip testing area
+              continue
+            y_min, y_max, x_min, x_max = y, y+y_size, x, x+x_size
+            
+            Masked_oco = OCOmap[t, y_min:y_max, x_min:x_max]
+            if np.count_nonzero(np.isnan(Masked_oco))<=10:
+              df_oco.loc[len(df_oco.index)] = [t, y_min, y_max, x_min, x_max]
+      
+      
+    df_oco = df_oco.astype('int')  
+    print('df_oco.shape',df_oco.shape)
+    
     # %%
     # get mean and standard deviation that are precalculated by a helpers function
     df_m_std = helpers.GetMeanAndStd(path=pathLoadMeanStdInd)
@@ -318,28 +359,15 @@ def get_500m_dataset(xLims=np.array([10,15]), yLims=np.array([45,50]), xLims_tes
     if DATA_OPTION == 1:
       
         keys = ['LR_SIF', 'NIRv','kNDVI','EVI','NDVI', 'NIR', 'RED', 'Blue', 'Green', 'SWIR1', 'SWIR2','SWIR3', 'cosSZA', 'temperature', 'precipitation', 'temperature_delay', 'precipitation_delay', 'ssm', 'susm','land_mask', 'topography', 'LULC_Others', 'LULC_ENF', 'LULC_EBF', 'LULC_DNF', 'LULC_DBF', 'LULC_Mixed Forest', 'LULC_Unknown Forest', 'LULC_Shrubland', 'LULC_Grassland', 'LULC_Cropland', 'LULC_Wetland']
-        scale = 1
-        y_size, x_size = 5*scale, 4*scale
-        inp = np.zeros((len(df_oco2), y_size, x_size, len(keys)))
-        ocos = np.zeros((len(df_oco2), y_size, x_size))
+        
+        inp = np.zeros((len(df_oco), y_size, x_size, len(keys)))
+        ocos = np.zeros((len(df_oco), y_size, x_size))
         inp[:] = np.nan
         #ocos[:] = np.nan
         ys, xs = [], []
         #create training samples
-        for N_oco in range(len(df_oco2)):
-            #create mask for sif
-            step = helpers.nearest_date(df_oco2['date_UTC'][N_oco],dates)
-            r = sif.shape
-            #print(r)
-            #print('t:',r[0],'x:',r[2],'y:',r[1])    
-            x_min, x_max, y_min, y_max = helpers.MaskGenerator(lon_modis_0005, lat_modis_0005, df=df_oco2.iloc[N_oco,:])
-            if (scale ==1):
-                scale = 0
-            x_min, x_max, y_min, y_max = x_min-round(x_size/2), x_min-round(x_size/2)+x_size, y_min-round(y_size/2), y_min-round(y_size/2)+y_size
-            if((x_min<0) or (x_max<0) or (x_min>len(lon_modis_0005)) or (x_max>len(lon_modis_0005))):
-                print('Latitude, Longitude: ',df_oco2['Latitude_Corners1'][N_oco], df_oco2['Longitude_Corners1'][N_oco])
-            if((y_min<0) or (y_max<0) or (y_min>len(lat_modis_0005)) or (y_max>len(lat_modis_0005))):
-                print('Latitude, Longitude: ',df_oco2['Latitude_Corners1'][N_oco], df_oco2['Longitude_Corners1'][N_oco])
+        for N_oco in range(len(df_oco)):
+            step, y_min, y_max, x_min, x_max = df_oco['t'][N_oco], df_oco['y_min'][N_oco], df_oco['y_max'][N_oco], df_oco['x_min'][N_oco], df_oco['x_max'][N_oco]
                 
             Masked_sif = sif[step, y_min:y_max, x_min:x_max]
             Masked_sif_dc_feat = sif_dc_feat[step, y_min:y_max, x_min:x_max]
@@ -347,13 +375,7 @@ def get_500m_dataset(xLims=np.array([10,15]), yLims=np.array([45,50]), xLims_tes
             #print('shape of masked_sif: ',Masked_sif.shape)
             #print('x_min, x_max, y_min, y_max',x_min, x_max, y_min, y_max)
             
-            #oco target
-            oco = Masked_sif.copy()
-            oco.fill(df_oco2['Daily_SIF_740nm'][N_oco]) #ask
-            #print('df_oco2.iloc[N_oco,:]',df_oco2.iloc[N_oco,:])
-            #create mask for modis
-            #x_min, x_max, y_min, y_max = helpers.MaskGenerator(xLims=np.array([0, 20]), yLims=np.array([40, 50]), Nx=ix_max_Modis-ix_min_Modis, Ny=iy_max_Modis-iy_min_Modis, df=df_oco2.iloc[N_oco,:])
-
+ 
             Masked_nir = nir[step,y_min:y_max, x_min:x_max]
             Masked_red = red[step,y_min:y_max, x_min:x_max]
             Masked_blue = blue[step,y_min:y_max, x_min:x_max]
@@ -373,592 +395,46 @@ def get_500m_dataset(xLims=np.array([10,15]), yLims=np.array([45,50]), xLims_tes
             Masked_ssm = ssm[step,y_min:y_max, x_min:x_max]
             Masked_susm = susm[step,y_min:y_max, x_min:x_max]
             
-
+            Masked_oco = OCOmap[step,y_min:y_max, x_min:x_max]
             
-            y, x = Masked_sif.shape[0], Masked_sif.shape[1]
-            ys.append(y)
-            xs.append(x)
-            #print(N_oco,y, x)
 
-            inp[N_oco,0:y,0:x,0] = Masked_sif
-            inp[N_oco,0:y,0:x,1] = Masked_nirv
-            inp[N_oco,0:y,0:x,2] = Masked_kNDVI
-            inp[N_oco,0:y,0:x,3] = Masked_evi
-            inp[N_oco,0:y,0:x,4] = Masked_ndvi
-            inp[N_oco,0:y,0:x,5] = Masked_nir
-            inp[N_oco,0:y,0:x,6] = Masked_red
-            inp[N_oco,0:y,0:x,7] = Masked_blue
-            inp[N_oco,0:y,0:x,8] = Masked_green
-            inp[N_oco,0:y,0:x,9] = Masked_swir1
-            inp[N_oco,0:y,0:x,10] = Masked_swir2
-            inp[N_oco,0:y,0:x,11] = Masked_swir3
-            inp[N_oco,0:y,0:x,12] = Masked_cosSZA
-            inp[N_oco,0:y,0:x,13] = Masked_temperature
-            inp[N_oco,0:y,0:x,14] = Masked_precipitation
-            inp[N_oco,0:y,0:x,15] = Masked_temperature_del
-            inp[N_oco,0:y,0:x,16] = Masked_precipitation_del
-            inp[N_oco,0:y,0:x,17] = Masked_ssm
-            inp[N_oco,0:y,0:x,18] = Masked_susm            
+
+
+            inp[N_oco,:,:,0] = Masked_sif
+            inp[N_oco,:,:,1] = Masked_nirv
+            inp[N_oco,:,:,2] = Masked_kNDVI
+            inp[N_oco,:,:,3] = Masked_evi
+            inp[N_oco,:,:,4] = Masked_ndvi
+            inp[N_oco,:,:,5] = Masked_nir
+            inp[N_oco,:,:,6] = Masked_red
+            inp[N_oco,:,:,7] = Masked_blue
+            inp[N_oco,:,:,8] = Masked_green
+            inp[N_oco,:,:,9] = Masked_swir1
+            inp[N_oco,:,:,10] = Masked_swir2
+            inp[N_oco,:,:,11] = Masked_swir3
+            inp[N_oco,:,:,12] = Masked_cosSZA
+            inp[N_oco,:,:,13] = Masked_temperature
+            inp[N_oco,:,:,14] = Masked_precipitation
+            inp[N_oco,:,:,15] = Masked_temperature_del
+            inp[N_oco,:,:,16] = Masked_precipitation_del
+            inp[N_oco,:,:,17] = Masked_ssm
+            inp[N_oco,:,:,18] = Masked_susm            
             #
-            inp[N_oco,0:y,0:x,19] = land_mask[y_min:y_max, x_min:x_max]
-            inp[N_oco,0:y,0:x,20] = topography[y_min:y_max, x_min:x_max]            
+            inp[N_oco,:,:,19] = land_mask[y_min:y_max, x_min:x_max]
+            inp[N_oco,:,:,20] = topography[y_min:y_max, x_min:x_max]            
 
             #for l in lulc_keys: #ask
             #    keys.append('LULC_'+l)
 
-            inp[N_oco,0:y,0:x,21:32] = lulc[y_min:y_max, x_min:x_max,:] #shape: (lat,lon,11)
+            inp[N_oco,:,:,21:32] = lulc[y_min:y_max, x_min:x_max,:] #shape: (lat,lon,11)
             
             
-            ocos[N_oco,::] = oco.copy()
-        Ys, Xs = np.array([ys]), np.array([xs])
-        
-        
-        
-        #create testing samples
-
-    elif DATA_OPTION == 2: #no ssm ssum
-      
-        keys = ['LR_SIF', 'NIRv','kNDVI','EVI','NDVI', 'NIR', 'RED', 'Blue', 'Green', 'SWIR1', 'SWIR2','SWIR3', 'cosSZA', 'temperature', 'precipitation', 'temperature_delay', 'precipitation_delay','land_mask', 'topography', 'LULC_Others', 'LULC_ENF', 'LULC_EBF', 'LULC_DNF', 'LULC_DBF', 'LULC_Mixed Forest', 'LULC_Unknown Forest', 'LULC_Shrubland', 'LULC_Grassland', 'LULC_Cropland', 'LULC_Wetland']
-        y_size, x_size = 5, 4
-        inp = np.zeros((len(df_oco2), y_size, x_size, len(keys)))
-        ocos = np.zeros((len(df_oco2), y_size, x_size))
-        inp[:] = np.nan
-        #ocos[:] = np.nan
-        ys, xs = [], []
-        #create training samples
-        for N_oco in range(len(df_oco2)):
-            #create mask for sif
-            step = helpers.nearest_date(df_oco2['date_UTC'][N_oco],dates)
-            r = sif.shape
-            #print(r)
-            #print('t:',r[0],'x:',r[2],'y:',r[1])    
-            x_min, x_max, y_min, y_max = helpers.MaskGenerator(lon_modis_0005, lat_modis_0005, df=df_oco2.iloc[N_oco,:])
-            Masked_sif = sif[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_sif_dc_feat = sif_dc_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_dcCorr_feat = dcCorr_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            #print('shape of masked_sif: ',Masked_sif.shape)
-            #print('x_min, x_max, y_min, y_max',x_min, x_max, y_min, y_max)
-            
-            #oco target
-            oco = Masked_sif.copy()
-            oco.fill(df_oco2['Daily_SIF_740nm'][N_oco])
-            #create mask for modis
-            #x_min, x_max, y_min, y_max = helpers.MaskGenerator(xLims=np.array([0, 20]), yLims=np.array([40, 50]), Nx=ix_max_Modis-ix_min_Modis, Ny=iy_max_Modis-iy_min_Modis, df=df_oco2.iloc[N_oco,:])
-
-            Masked_nir = nir[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_red = red[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_blue = blue[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_green = green[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir1 = swir1[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir2 = swir2[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir3 = swir3[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_nirv = nirv[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_kNDVI = kNDVI[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_evi = evi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_ndvi = ndvi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_cosSZA = cosSZA[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_temperature = temperature[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_precipitation = precipitation[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_temperature_del = temperature_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_precipitation_del = precipitation_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_ssm = ssm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_susm = susm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            
-
-            
-            y, x = Masked_sif.shape[0], Masked_sif.shape[1]
-            ys.append(y)
-            xs.append(x)
-            #print(N_oco,y, x)
-
-            inp[N_oco,0:y,0:x,0] = Masked_sif
-            inp[N_oco,0:y,0:x,1] = Masked_nirv
-            inp[N_oco,0:y,0:x,2] = Masked_kNDVI
-            inp[N_oco,0:y,0:x,3] = Masked_evi
-            inp[N_oco,0:y,0:x,4] = Masked_ndvi
-            inp[N_oco,0:y,0:x,5] = Masked_nir
-            inp[N_oco,0:y,0:x,6] = Masked_red
-            inp[N_oco,0:y,0:x,7] = Masked_blue
-            inp[N_oco,0:y,0:x,8] = Masked_green
-            inp[N_oco,0:y,0:x,9] = Masked_swir1
-            inp[N_oco,0:y,0:x,10] = Masked_swir2
-            inp[N_oco,0:y,0:x,11] = Masked_swir3
-            inp[N_oco,0:y,0:x,12] = Masked_cosSZA
-            inp[N_oco,0:y,0:x,13] = Masked_temperature
-            inp[N_oco,0:y,0:x,14] = Masked_precipitation
-            inp[N_oco,0:y,0:x,15] = Masked_temperature_del
-            inp[N_oco,0:y,0:x,16] = Masked_precipitation_del
-            #inp[N_oco,0:y,0:x,17] = Masked_ssm
-            #inp[N_oco,0:y,0:x,18] = Masked_susm            
-            #
-            inp[N_oco,0:y,0:x,17] = land_mask[y_min:y_min+y_size,x_min:x_min+x_size]
-            inp[N_oco,0:y,0:x,18] = topography[y_min:y_min+y_size,x_min:x_min+x_size]            
-
-            #for l in lulc_keys: #ask
-            #    keys.append('LULC_'+l)
-
-            inp[N_oco,0:y,0:x,19:30] = lulc[y_min:y_min+y_size,x_min:x_min+x_size,:] #shape: (lat,lon,11)
-            
-            
-            ocos[N_oco,0:y,0:x] = oco
-        Ys, Xs = np.array([ys]), np.array([xs])
-        
-
-
-    elif DATA_OPTION == 3: #no ssm ssum, 'topography'
-      
-        keys = ['LR_SIF', 'NIRv','kNDVI','EVI','NDVI', 'NIR', 'RED', 'Blue', 'Green', 'SWIR1', 'SWIR2','SWIR3', 'cosSZA', 'temperature', 'precipitation', 'temperature_delay', 'precipitation_delay','land_mask', 'LULC_Others', 'LULC_ENF', 'LULC_EBF', 'LULC_DNF', 'LULC_DBF', 'LULC_Mixed Forest', 'LULC_Unknown Forest', 'LULC_Shrubland', 'LULC_Grassland', 'LULC_Cropland', 'LULC_Wetland']
-        y_size, x_size = 5, 4
-        inp = np.zeros((len(df_oco2), y_size, x_size, len(keys)))
-        ocos = np.zeros((len(df_oco2), y_size, x_size))
-        inp[:] = np.nan
-        #ocos[:] = np.nan
-        ys, xs = [], []
-        #create training samples
-        for N_oco in range(len(df_oco2)):
-            #create mask for sif
-            step = helpers.nearest_date(df_oco2.iloc[N_oco,:]['date_UTC'],dates)
-            r = sif.shape
-            #print(r)
-            #print('t:',r[0],'x:',r[2],'y:',r[1])    
-            x_min, x_max, y_min, y_max = helpers.MaskGenerator(lon_modis_0005, lat_modis_0005, df=df_oco2.iloc[N_oco,:])
-            Masked_sif = sif[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_sif_dc_feat = sif_dc_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_dcCorr_feat = dcCorr_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            #print('shape of masked_sif: ',Masked_sif.shape)
-            #print('x_min, x_max, y_min, y_max',x_min, x_max, y_min, y_max)
-            
-            #oco target
-            oco = Masked_sif.copy()
-            oco.fill(df_oco2.iloc[N_oco,:][1])
-            #create mask for modis
-            #x_min, x_max, y_min, y_max = helpers.MaskGenerator(xLims=np.array([0, 20]), yLims=np.array([40, 50]), Nx=ix_max_Modis-ix_min_Modis, Ny=iy_max_Modis-iy_min_Modis, df=df_oco2.iloc[N_oco,:])
-
-            Masked_nir = nir[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_red = red[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_blue = blue[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_green = green[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir1 = swir1[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir2 = swir2[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir3 = swir3[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_nirv = nirv[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_kNDVI = kNDVI[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_evi = evi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_ndvi = ndvi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_cosSZA = cosSZA[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_temperature = temperature[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_precipitation = precipitation[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_temperature_del = temperature_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_precipitation_del = precipitation_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_ssm = ssm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_susm = susm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            
-
-            
-            y, x = Masked_sif.shape[0], Masked_sif.shape[1]
-            ys.append(y)
-            xs.append(x)
-            #print(N_oco,y, x)
-
-            inp[N_oco,0:y,0:x,0] = Masked_sif
-            inp[N_oco,0:y,0:x,1] = Masked_nirv
-            inp[N_oco,0:y,0:x,2] = Masked_kNDVI
-            inp[N_oco,0:y,0:x,3] = Masked_evi
-            inp[N_oco,0:y,0:x,4] = Masked_ndvi
-            inp[N_oco,0:y,0:x,5] = Masked_nir
-            inp[N_oco,0:y,0:x,6] = Masked_red
-            inp[N_oco,0:y,0:x,7] = Masked_blue
-            inp[N_oco,0:y,0:x,8] = Masked_green
-            inp[N_oco,0:y,0:x,9] = Masked_swir1
-            inp[N_oco,0:y,0:x,10] = Masked_swir2
-            inp[N_oco,0:y,0:x,11] = Masked_swir3
-            inp[N_oco,0:y,0:x,12] = Masked_cosSZA
-            inp[N_oco,0:y,0:x,13] = Masked_temperature
-            inp[N_oco,0:y,0:x,14] = Masked_precipitation
-            inp[N_oco,0:y,0:x,15] = Masked_temperature_del
-            inp[N_oco,0:y,0:x,16] = Masked_precipitation_del
-            #inp[N_oco,0:y,0:x,17] = Masked_ssm
-            #inp[N_oco,0:y,0:x,18] = Masked_susm            
-            #
-            inp[N_oco,0:y,0:x,17] = land_mask[y_min:y_min+y_size,x_min:x_min+x_size]
-            #inp[N_oco,0:y,0:x,18] = topography[y_min:y_min+y_size,x_min:x_min+x_size]            
-
-            #for l in lulc_keys: #ask
-            #    keys.append('LULC_'+l)
-
-            inp[N_oco,0:y,0:x,18:29] = lulc[y_min:y_min+y_size,x_min:x_min+x_size,:] #shape: (lat,lon,11)
-            
-            
-            ocos[N_oco,0:y,0:x] = oco
-        Ys, Xs = np.array([ys]), np.array([xs])
-        
-
-    
-    elif DATA_OPTION == 4: #no ssm ssum, 'topography', 'temperature', 'precipitation', 'temperature_delay', 'precipitation_delay',
-      
-        keys = ['LR_SIF', 'NIRv','kNDVI','EVI','NDVI', 'NIR', 'RED', 'Blue', 'Green', 'SWIR1', 'SWIR2','SWIR3', 'cosSZA', 'land_mask', 'LULC_Others', 'LULC_ENF', 'LULC_EBF', 'LULC_DNF', 'LULC_DBF', 'LULC_Mixed Forest', 'LULC_Unknown Forest', 'LULC_Shrubland', 'LULC_Grassland', 'LULC_Cropland', 'LULC_Wetland']
-        y_size, x_size = 5, 4
-        inp = np.zeros((len(df_oco2), y_size, x_size, len(keys)))
-        ocos = np.zeros((len(df_oco2), y_size, x_size))
-        inp[:] = np.nan
-        #ocos[:] = np.nan
-        ys, xs = [], []
-        #create training samples
-        for N_oco in range(len(df_oco2)):
-            #create mask for sif
-            step = helpers.nearest_date(df_oco2.iloc[N_oco,:]['date_UTC'],dates)
-            r = sif.shape
-            #print(r)
-            #print('t:',r[0],'x:',r[2],'y:',r[1])    
-            x_min, x_max, y_min, y_max = helpers.MaskGenerator(lon_modis_0005, lat_modis_0005, df=df_oco2.iloc[N_oco,:])
-            Masked_sif = sif[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_sif_dc_feat = sif_dc_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_dcCorr_feat = dcCorr_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            #print('shape of masked_sif: ',Masked_sif.shape)
-            #print('x_min, x_max, y_min, y_max',x_min, x_max, y_min, y_max)
-            
-            #oco target
-            oco = Masked_sif.copy()
-            oco.fill(df_oco2.iloc[N_oco,:][1])
-            #create mask for modis
-            #x_min, x_max, y_min, y_max = helpers.MaskGenerator(xLims=np.array([0, 20]), yLims=np.array([40, 50]), Nx=ix_max_Modis-ix_min_Modis, Ny=iy_max_Modis-iy_min_Modis, df=df_oco2.iloc[N_oco,:])
-
-            Masked_nir = nir[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_red = red[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_blue = blue[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_green = green[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir1 = swir1[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir2 = swir2[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir3 = swir3[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_nirv = nirv[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_kNDVI = kNDVI[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_evi = evi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_ndvi = ndvi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_cosSZA = cosSZA[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_temperature = temperature[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_precipitation = precipitation[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_temperature_del = temperature_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_precipitation_del = precipitation_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_ssm = ssm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_susm = susm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            
-
-            
-            y, x = Masked_sif.shape[0], Masked_sif.shape[1]
-            ys.append(y)
-            xs.append(x)
-            #print(N_oco,y, x)
-
-            inp[N_oco,0:y,0:x,0] = Masked_sif
-            inp[N_oco,0:y,0:x,1] = Masked_nirv
-            inp[N_oco,0:y,0:x,2] = Masked_kNDVI
-            inp[N_oco,0:y,0:x,3] = Masked_evi
-            inp[N_oco,0:y,0:x,4] = Masked_ndvi
-            inp[N_oco,0:y,0:x,5] = Masked_nir
-            inp[N_oco,0:y,0:x,6] = Masked_red
-            inp[N_oco,0:y,0:x,7] = Masked_blue
-            inp[N_oco,0:y,0:x,8] = Masked_green
-            inp[N_oco,0:y,0:x,9] = Masked_swir1
-            inp[N_oco,0:y,0:x,10] = Masked_swir2
-            inp[N_oco,0:y,0:x,11] = Masked_swir3
-            inp[N_oco,0:y,0:x,12] = Masked_cosSZA
-            #inp[N_oco,0:y,0:x,13] = Masked_temperature
-            #inp[N_oco,0:y,0:x,14] = Masked_precipitation
-            #inp[N_oco,0:y,0:x,15] = Masked_temperature_del
-            #inp[N_oco,0:y,0:x,16] = Masked_precipitation_del
-            #inp[N_oco,0:y,0:x,17] = Masked_ssm
-            #inp[N_oco,0:y,0:x,18] = Masked_susm            
-            #
-            inp[N_oco,0:y,0:x,13] = land_mask[y_min:y_min+y_size,x_min:x_min+x_size]
-            #inp[N_oco,0:y,0:x,18] = topography[y_min:y_min+y_size,x_min:x_min+x_size]            
-
-            #for l in lulc_keys: #ask
-            #    keys.append('LULC_'+l)
-
-            inp[N_oco,0:y,0:x,14:25] = lulc[y_min:y_min+y_size,x_min:x_min+x_size,:] #shape: (lat,lon,11)
-            
-            
-            ocos[N_oco,0:y,0:x] = oco
-        Ys, Xs = np.array([ys]), np.array([xs])
-        
-
-
-    elif DATA_OPTION == 5: #no ssm ssum, 'topography', 'temperature', 'precipitation', 'temperature_delay', 'precipitation_delay','kNDVI','EVI','NDVI',
-      
-        keys = ['LR_SIF', 'NIRv', 'NIR', 'RED', 'Blue', 'Green', 'SWIR1', 'SWIR2','SWIR3', 'cosSZA', 'land_mask', 'LULC_Others', 'LULC_ENF', 'LULC_EBF', 'LULC_DNF', 'LULC_DBF', 'LULC_Mixed Forest', 'LULC_Unknown Forest', 'LULC_Shrubland', 'LULC_Grassland', 'LULC_Cropland', 'LULC_Wetland']
-        y_size, x_size = 5, 4
-        inp = np.zeros((len(df_oco2), y_size, x_size, len(keys)))
-        ocos = np.zeros((len(df_oco2), y_size, x_size))
-        inp[:] = np.nan
-        #ocos[:] = np.nan
-        ys, xs = [], []
-        #create training samples
-        for N_oco in range(len(df_oco2)):
-            #create mask for sif
-            step = helpers.nearest_date(df_oco2.iloc[N_oco,:]['date_UTC'],dates)
-            r = sif.shape
-            #print(r)
-            #print('t:',r[0],'x:',r[2],'y:',r[1])    
-            x_min, x_max, y_min, y_max = helpers.MaskGenerator(lon_modis_0005, lat_modis_0005, df=df_oco2.iloc[N_oco,:])
-            Masked_sif = sif[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_sif_dc_feat = sif_dc_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_dcCorr_feat = dcCorr_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            #print('shape of masked_sif: ',Masked_sif.shape)
-            #print('x_min, x_max, y_min, y_max',x_min, x_max, y_min, y_max)
-            
-            #oco target
-            oco = Masked_sif.copy()
-            oco.fill(df_oco2.iloc[N_oco,:][1])
-            #create mask for modis
-            #x_min, x_max, y_min, y_max = helpers.MaskGenerator(xLims=np.array([0, 20]), yLims=np.array([40, 50]), Nx=ix_max_Modis-ix_min_Modis, Ny=iy_max_Modis-iy_min_Modis, df=df_oco2.iloc[N_oco,:])
-
-            Masked_nir = nir[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_red = red[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_blue = blue[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_green = green[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir1 = swir1[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir2 = swir2[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir3 = swir3[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_nirv = nirv[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_kNDVI = kNDVI[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_evi = evi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_ndvi = ndvi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_cosSZA = cosSZA[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_temperature = temperature[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_precipitation = precipitation[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_temperature_del = temperature_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_precipitation_del = precipitation_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_ssm = ssm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_susm = susm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            
-
-            
-            y, x = Masked_sif.shape[0], Masked_sif.shape[1]
-            ys.append(y)
-            xs.append(x)
-            #print(N_oco,y, x)
-
-            inp[N_oco,0:y,0:x,0] = Masked_sif
-            inp[N_oco,0:y,0:x,1] = Masked_nirv
-            #inp[N_oco,0:y,0:x,2] = Masked_kNDVI
-            #inp[N_oco,0:y,0:x,3] = Masked_evi
-            #inp[N_oco,0:y,0:x,4] = Masked_ndvi
-            inp[N_oco,0:y,0:x,2] = Masked_nir
-            inp[N_oco,0:y,0:x,3] = Masked_red
-            inp[N_oco,0:y,0:x,4] = Masked_blue
-            inp[N_oco,0:y,0:x,5] = Masked_green
-            inp[N_oco,0:y,0:x,6] = Masked_swir1
-            inp[N_oco,0:y,0:x,7] = Masked_swir2
-            inp[N_oco,0:y,0:x,8] = Masked_swir3
-            inp[N_oco,0:y,0:x,9] = Masked_cosSZA
-            #inp[N_oco,0:y,0:x,13] = Masked_temperature
-            #inp[N_oco,0:y,0:x,14] = Masked_precipitation
-            #inp[N_oco,0:y,0:x,15] = Masked_temperature_del
-            #inp[N_oco,0:y,0:x,16] = Masked_precipitation_del
-            #inp[N_oco,0:y,0:x,17] = Masked_ssm
-            #inp[N_oco,0:y,0:x,18] = Masked_susm            
-            #
-            inp[N_oco,0:y,0:x,10] = land_mask[y_min:y_min+y_size,x_min:x_min+x_size]
-            #inp[N_oco,0:y,0:x,18] = topography[y_min:y_min+y_size,x_min:x_min+x_size]            
-
-            #for l in lulc_keys: #ask
-            #    keys.append('LULC_'+l)
-
-            inp[N_oco,0:y,0:x,11:22] = lulc[y_min:y_min+y_size,x_min:x_min+x_size,:] #shape: (lat,lon,11)
-            
-            
-            ocos[N_oco,0:y,0:x] = oco
-        Ys, Xs = np.array([ys]), np.array([xs])
-        
-
-
-    elif DATA_OPTION == 6: #no ssm ssum, 'topography', 'temperature', 'precipitation', 'temperature_delay', 'precipitation_delay','kNDVI','EVI','NDVI',, 'LULC_Others', 'LULC_ENF', 'LULC_EBF', 'LULC_DNF', 'LULC_DBF', 'LULC_Mixed Forest', 'LULC_Unknown Forest', 'LULC_Shrubland', 'LULC_Grassland', 'LULC_Cropland', 'LULC_Wetland'
-      
-        keys = ['LR_SIF', 'NIRv', 'NIR', 'RED', 'Blue', 'Green', 'SWIR1', 'SWIR2','SWIR3', 'cosSZA', 'land_mask']
-        y_size, x_size = 5, 4
-        inp = np.zeros((len(df_oco2), y_size, x_size, len(keys)))
-        ocos = np.zeros((len(df_oco2), y_size, x_size))
-        inp[:] = np.nan
-        #ocos[:] = np.nan
-        ys, xs = [], []
-        #create training samples
-        for N_oco in range(len(df_oco2)):
-            #create mask for sif
-            step = helpers.nearest_date(df_oco2.iloc[N_oco,:]['date_UTC'],dates)
-            r = sif.shape
-            #print(r)
-            #print('t:',r[0],'x:',r[2],'y:',r[1])    
-            x_min, x_max, y_min, y_max = helpers.MaskGenerator(lon_modis_0005, lat_modis_0005, df=df_oco2.iloc[N_oco,:])
-            Masked_sif = sif[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_sif_dc_feat = sif_dc_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_dcCorr_feat = dcCorr_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            #print('shape of masked_sif: ',Masked_sif.shape)
-            #print('x_min, x_max, y_min, y_max',x_min, x_max, y_min, y_max)
-            
-            #oco target
-            oco = Masked_sif.copy()
-            oco.fill(df_oco2.iloc[N_oco,:][1])
-            #create mask for modis
-            #x_min, x_max, y_min, y_max = helpers.MaskGenerator(xLims=np.array([0, 20]), yLims=np.array([40, 50]), Nx=ix_max_Modis-ix_min_Modis, Ny=iy_max_Modis-iy_min_Modis, df=df_oco2.iloc[N_oco,:])
-
-            Masked_nir = nir[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_red = red[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_blue = blue[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_green = green[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir1 = swir1[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir2 = swir2[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir3 = swir3[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_nirv = nirv[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_kNDVI = kNDVI[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_evi = evi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_ndvi = ndvi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_cosSZA = cosSZA[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_temperature = temperature[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_precipitation = precipitation[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_temperature_del = temperature_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_precipitation_del = precipitation_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_ssm = ssm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_susm = susm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            
-
-            
-            y, x = Masked_sif.shape[0], Masked_sif.shape[1]
-            ys.append(y)
-            xs.append(x)
-            #print(N_oco,y, x)
-
-            inp[N_oco,0:y,0:x,0] = Masked_sif
-            inp[N_oco,0:y,0:x,1] = Masked_nirv
-            #inp[N_oco,0:y,0:x,2] = Masked_kNDVI
-            #inp[N_oco,0:y,0:x,3] = Masked_evi
-            #inp[N_oco,0:y,0:x,4] = Masked_ndvi
-            inp[N_oco,0:y,0:x,2] = Masked_nir
-            inp[N_oco,0:y,0:x,3] = Masked_red
-            inp[N_oco,0:y,0:x,4] = Masked_blue
-            inp[N_oco,0:y,0:x,5] = Masked_green
-            inp[N_oco,0:y,0:x,6] = Masked_swir1
-            inp[N_oco,0:y,0:x,7] = Masked_swir2
-            inp[N_oco,0:y,0:x,8] = Masked_swir3
-            inp[N_oco,0:y,0:x,9] = Masked_cosSZA
-            #inp[N_oco,0:y,0:x,13] = Masked_temperature
-            #inp[N_oco,0:y,0:x,14] = Masked_precipitation
-            #inp[N_oco,0:y,0:x,15] = Masked_temperature_del
-            #inp[N_oco,0:y,0:x,16] = Masked_precipitation_del
-            #inp[N_oco,0:y,0:x,17] = Masked_ssm
-            #inp[N_oco,0:y,0:x,18] = Masked_susm            
-            #
-            inp[N_oco,0:y,0:x,10] = land_mask[y_min:y_min+y_size,x_min:x_min+x_size]
-            #inp[N_oco,0:y,0:x,18] = topography[y_min:y_min+y_size,x_min:x_min+x_size]            
-
-            #for l in lulc_keys: #ask
-            #    keys.append('LULC_'+l)
-
-            #inp[N_oco,0:y,0:x,11:22] = lulc[y_min:y_min+y_size,x_min:x_min+x_size,:] #shape: (lat,lon,11)
-            
-            
-            ocos[N_oco,0:y,0:x] = oco
-        Ys, Xs = np.array([ys]), np.array([xs])
-        
-
-
-    elif DATA_OPTION == 7: #no ssm ssum, 'topography', 'temperature', 'precipitation', 'temperature_delay', 'precipitation_delay','kNDVI','EVI','NDVI',, 'LULC_Others', 'LULC_ENF', 'LULC_EBF', 'LULC_DNF', 'LULC_DBF', 'LULC_Mixed Forest', 'LULC_Unknown Forest', 'LULC_Shrubland', 'LULC_Grassland', 'LULC_Cropland', 'LULC_Wetland''NIR', 'RED', 'Blue', 'Green', 'SWIR1', 'SWIR2','SWIR3',
-      
-        keys = ['LR_SIF', 'NIRv',  'cosSZA', 'land_mask']
-        y_size, x_size = 5, 4
-        inp = np.zeros((len(df_oco2), y_size, x_size, len(keys)))
-        ocos = np.zeros((len(df_oco2), y_size, x_size))
-        inp[:] = np.nan
-        #ocos[:] = np.nan
-        ys, xs = [], []
-        #create training samples
-        for N_oco in range(len(df_oco2)):
-            #create mask for sif
-            step = helpers.nearest_date(df_oco2.iloc[N_oco,:]['date_UTC'],dates)
-            r = sif.shape
-            #print(r)
-            #print('t:',r[0],'x:',r[2],'y:',r[1])    
-            x_min, x_max, y_min, y_max = helpers.MaskGenerator(lon_modis_0005, lat_modis_0005, df=df_oco2.iloc[N_oco,:])
-            Masked_sif = sif[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_sif_dc_feat = sif_dc_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_dcCorr_feat = dcCorr_feat[step, y_min:y_min+y_size,x_min:x_min+x_size]
-            #print('shape of masked_sif: ',Masked_sif.shape)
-            #print('x_min, x_max, y_min, y_max',x_min, x_max, y_min, y_max)
-            
-            #oco target
-            oco = Masked_sif.copy()
-            oco.fill(df_oco2.iloc[N_oco,:][1])
-            #create mask for modis
-            #x_min, x_max, y_min, y_max = helpers.MaskGenerator(xLims=np.array([0, 20]), yLims=np.array([40, 50]), Nx=ix_max_Modis-ix_min_Modis, Ny=iy_max_Modis-iy_min_Modis, df=df_oco2.iloc[N_oco,:])
-
-            Masked_nir = nir[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_red = red[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_blue = blue[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_green = green[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir1 = swir1[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir2 = swir2[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_swir3 = swir3[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_nirv = nirv[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_kNDVI = kNDVI[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_evi = evi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_ndvi = ndvi[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            Masked_cosSZA = cosSZA[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_temperature = temperature[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_precipitation = precipitation[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_temperature_del = temperature_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_precipitation_del = precipitation_del[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_ssm = ssm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            #Masked_susm = susm[step,y_min:y_min+y_size,x_min:x_min+x_size]
-            
-
-            
-            y, x = Masked_sif.shape[0], Masked_sif.shape[1]
-            ys.append(y)
-            xs.append(x)
-            #print(N_oco,y, x)
-
-            inp[N_oco,0:y,0:x,0] = Masked_sif
-            inp[N_oco,0:y,0:x,1] = Masked_nirv
-            #inp[N_oco,0:y,0:x,2] = Masked_kNDVI
-            #inp[N_oco,0:y,0:x,3] = Masked_evi
-            #inp[N_oco,0:y,0:x,4] = Masked_ndvi
-            #inp[N_oco,0:y,0:x,2] = Masked_nir
-            #inp[N_oco,0:y,0:x,3] = Masked_red
-            #inp[N_oco,0:y,0:x,4] = Masked_blue
-            #inp[N_oco,0:y,0:x,5] = Masked_green
-            #inp[N_oco,0:y,0:x,6] = Masked_swir1
-            #inp[N_oco,0:y,0:x,7] = Masked_swir2
-            #inp[N_oco,0:y,0:x,8] = Masked_swir3
-            inp[N_oco,0:y,0:x,2] = Masked_cosSZA
-            #inp[N_oco,0:y,0:x,13] = Masked_temperature
-            #inp[N_oco,0:y,0:x,14] = Masked_precipitation
-            #inp[N_oco,0:y,0:x,15] = Masked_temperature_del
-            #inp[N_oco,0:y,0:x,16] = Masked_precipitation_del
-            #inp[N_oco,0:y,0:x,17] = Masked_ssm
-            #inp[N_oco,0:y,0:x,18] = Masked_susm            
-            #
-            inp[N_oco,0:y,0:x,3] = land_mask[y_min:y_min+y_size,x_min:x_min+x_size]
-            #inp[N_oco,0:y,0:x,18] = topography[y_min:y_min+y_size,x_min:x_min+x_size]            
-
-            #for l in lulc_keys: #ask
-            #    keys.append('LULC_'+l)
-
-            #inp[N_oco,0:y,0:x,11:22] = lulc[y_min:y_min+y_size,x_min:x_min+x_size,:] #shape: (lat,lon,11)
-            
-            
-            ocos[N_oco,0:y,0:x] = oco.copy()
-        Ys, Xs = np.array([ys]), np.array([xs])
-        
+            ocos[N_oco,:,:] = Masked_oco.copy()
 
     
     else:
         0 == 0
 
-    inp07 = inp[ocos[:,0,0]>0.7,:,:,:]
-    ocos07 = ocos[ocos[:,0,0]>0.7,:,:]
-    inp10 = inp[ocos[:,0,0]>1.0,:,:,:]
-    ocos10 = ocos[ocos[:,0,0]>1.0,:,:]
-    inp = np.concatenate((inp, inp07, inp10), axis=0)
-    ocos = np.concatenate((ocos, ocos07, ocos10), axis=0)
     
     print('Number of nan in inp',np.count_nonzero(np.isnan(inp)))
     print('Number of nan in ocos',np.count_nonzero(np.isnan(ocos)))
@@ -982,7 +458,7 @@ def get_500m_dataset(xLims=np.array([10,15]), yLims=np.array([45,50]), xLims_tes
     print('0 to 0.5: ', ocos_05 - ocos_0)
     print('0.5 to 1.0: ', ocos_10 - ocos_05)
     print('> 1.0: ', 1 - ocos_10)
-    inp = np.moveaxis(inp, -1, 1)
+    inp = np.moveaxis(inp, -1, 1) 
     return inp, keys, ocos, dates, ti_days_since
     
     
@@ -1638,7 +1114,7 @@ def get_calc_500m_dataset(xLims=np.array([10,15]), yLims=np.array([45,50]), d_st
     print('0 to 0.5: ', ocos_05 - ocos_0)
     print('0.5 to 1.0: ', ocos_10 - ocos_05)
     print('> 1.0: ', 1 - ocos_10)
-    inp = np.moveaxis(inp, -1, 1)    
+    inp = np.moveaxis(inp, -1, 1)      
     return inp, keys, ocos, ylims_gridded, xlims_gridded, ti_days_since, lon, lat, lonM, latM, lon_Modis, lat_Modis
 
 
@@ -1658,7 +1134,7 @@ class DataSet(Dataset):
     def __getitem__(self, idx):
         sample = dict()
         sample['features'], sample['sif'] =self.features[idx], self.oco[idx]
-        
+
         return  sample
 '''
 inp, keys, oco = get_500m_dataset(     ...)
